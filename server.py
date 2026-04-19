@@ -803,10 +803,13 @@ async def youtube_video(q: str, _user=Header(None, alias="authorization")):
 app.include_router(api_router)
 app.include_router(preferences_router)
 
+_frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:8084")
+_cors_origins = [_frontend_url, "http://localhost:3000", "http://localhost:8084"]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
