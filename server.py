@@ -278,6 +278,54 @@ async def google_callback(code: str, response: Response, state: str = ""):
         raise HTTPException(status_code=500, detail="Google auth service unavailable")
 
 
+@api_router.get("/auth/google/exchange")
+async def google_exchange(code: str, response: Response):
+    """Frontend calls this with ?code= after Google redirects to the frontend callback URL."""
+    GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+    GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
+    GOOGLE_REDIRECT_URI = os.environ.get("GOOGLE_REDIRECT_URI")
+
+    try:
+        async with httpx.AsyncClient() as client:
+            token_resp = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "code": code,
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "grant_type": "authorization_code",
+                },
+                timeout=10.0,
+            )
+            if token_resp.status_code != 200:
+                raise HTTPException(status_code=401, detail="Google token exchange failed")
+
+            tokens = token_resp.json()
+            access_token = tokens.get("access_token")
+
+            userinfo_resp = await client.get(
+                "https://www.googleapis.com/oauth2/v2/userinfo",
+                headers={"Authorization": f"Bearer {access_token}"},
+                timeout=10.0,
+            )
+            if userinfo_resp.status_code != 200:
+                raise HTTPException(status_code=401, detail="Failed to fetch Google user info")
+
+            google_user = userinfo_resp.json()
+
+        user_doc, session_token = await _upsert_user_and_session(
+            email=google_user["email"],
+            name=google_user.get("name", ""),
+            picture=google_user.get("picture", ""),
+            response=response,
+        )
+        return {"session_token": session_token, "user": user_doc}
+
+    except httpx.RequestError:
+        raise HTTPException(status_code=500, detail="Google auth service unavailable")
+
+
 @api_router.post("/auth/session")
 async def create_session(request: SessionDataRequest, response: Response):
     """Kept for backwards-compat — no longer used for Google OAuth."""
@@ -804,7 +852,10 @@ app.include_router(api_router)
 app.include_router(preferences_router)
 
 _frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:8084")
+_extra_origins = os.environ.get("EXTRA_CORS_ORIGINS", "")
 _cors_origins = [_frontend_url, "http://localhost:3000", "http://localhost:8084"]
+if _extra_origins:
+    _cors_origins += [o.strip() for o in _extra_origins.split(",") if o.strip()]
 
 app.add_middleware(
     CORSMiddleware,
